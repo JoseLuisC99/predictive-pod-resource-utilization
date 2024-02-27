@@ -1,0 +1,4 @@
+.idea
+notebooks/img
+venv
+*.sh
