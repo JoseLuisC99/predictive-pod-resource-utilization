@@ -1,4 +1,6 @@
 .idea
 notebooks/img
+notebooks/.ipynb_checkpoints
+notebooks/archive
 venv
 *.sh

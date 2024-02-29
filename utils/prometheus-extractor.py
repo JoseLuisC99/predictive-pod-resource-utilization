@@ -78,7 +78,11 @@ if __name__ == '__main__':
         df = pd.DataFrame(values, columns=["timestamp", f"{pod_name}-{metric_name}"]).set_index("timestamp")
         node_df.append(df)
     node_df = pd.concat(node_df, axis=1, join="inner").apply(pd.to_numeric)
+    node_mean = node_df.mean()
+    node_std = node_df.std()
+    node_df = (node_df - node_mean) / node_std
     node_df.to_csv(os.path.join(args.output, "pod_metrics.csv"))
+    pd.DataFrame({"mean": node_mean, "std": node_std}).to_csv(os.path.join(args.output, "pod_stats.csv"))
 
     print("Loading Prometheus pod requests")
     graph_query = get_prometheus_graph(args.step, args.start, args.end, args.resol)
@@ -93,6 +97,7 @@ if __name__ == '__main__':
             graph_df.append([timestamp, source, dest, float(value)])
     graph_df = pd.DataFrame(graph_df, columns=["timestamp", "from", "to", "value"])
     graph_df = graph_df[graph_df["timestamp"].isin(node_df.index)].set_index("timestamp")
+    graph_df["value"] = graph_df["value"].astype(float)
     graph_df.to_csv(os.path.join(args.output, "pod_requests.csv"))
 
     node_df = node_df.sort_values("timestamp")
@@ -115,8 +120,6 @@ if __name__ == '__main__':
         y_node.append(np.array(y))
     X_node = np.array(X_node)
     y_node = np.array(y_node)
-    X_node[:, :, :, 1] = X_node[:, :, :, 1] / 1e6
-    y_node[:, :, 1] = y_node[:, :, 1] / 1e6
     np.savez(os.path.join(args.output, "node_features.npz"), X=X_node, y=y_node)
     print("Node dataset shape: X =", X_node.shape, ", y =", y_node.shape)
 
