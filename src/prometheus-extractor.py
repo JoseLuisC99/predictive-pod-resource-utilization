@@ -24,13 +24,11 @@ def get_prometheus_data(query: str, start: int, end: int, resolution: int) -> Di
 
 
 def get_prometheus_metrics(metric: str, pod: str, step: str, start: int, end: int, resolution: int) -> Dict:
-    query = METRIC_QUERY.format(metric, pod, step)
-    return get_prometheus_data(query, start, end, resolution)
+    return get_prometheus_data(METRIC_QUERY.format(metric, pod, step), start, end, resolution)
 
 
 def get_prometheus_graph(step: str, start: int, end: int, resolution: int) -> Dict:
-    query = GRAPH_QUERY.format(step)
-    return get_prometheus_data(query, start, end, resolution)
+    return get_prometheus_data(GRAPH_QUERY.format(step), start, end, resolution)
 
 
 if __name__ == '__main__':
@@ -50,6 +48,9 @@ if __name__ == '__main__':
                              "window * resol seconds)")
     parser.add_argument("--horizont", default=1, type=int,
                         help="Next value to predict (horizont * resol seconds after the resolution windows)")
+    parser.add_argument("--stats", required=False, default=None, type=str,
+                        help="Statistics to normalize")
+    parser.add_argument("--is-test", required=False, default=False, action="store_true")
     args = parser.parse_args()
 
     metric_info = [
@@ -78,11 +79,18 @@ if __name__ == '__main__':
         df = pd.DataFrame(values, columns=["timestamp", f"{pod_name}-{metric_name}"]).set_index("timestamp")
         node_df.append(df)
     node_df = pd.concat(node_df, axis=1, join="inner").apply(pd.to_numeric)
-    node_mean = node_df.mean()
-    node_std = node_df.std()
+
+    if args.stats is None:
+        node_mean = node_df.mean()
+        node_std = node_df.std()
+        pd.DataFrame({"mean": node_mean, "std": node_std}).to_csv(os.path.join(args.output, "pod_stats.csv"))
+        print("Saving stats")
+    else:
+        print("Reading stats")
+        stats = pd.read_csv(args.stats)
+        node_mean = stats["mean"]
+        node_std = stats["std"]
     node_df = (node_df - node_mean) / node_std
-    node_df.to_csv(os.path.join(args.output, "pod_metrics.csv"))
-    pd.DataFrame({"mean": node_mean, "std": node_std}).to_csv(os.path.join(args.output, "pod_stats.csv"))
 
     print("Loading Prometheus pod requests")
     graph_query = get_prometheus_graph(args.step, args.start, args.end, args.resol)
@@ -91,17 +99,19 @@ if __name__ == '__main__':
         source = result["metric"]["source_workload"]
         dest = result["metric"]["destination_workload"]
 
-        if source == "unknown" or dest == "unknown" or source == "loadgenerator" or source == "loadgenerator":
+        if source == "unknown" or dest == "unknown" or source == "loadgenerator" or dest == "loadgenerator":
             continue
         for [timestamp, value] in result["values"]:
             graph_df.append([timestamp, source, dest, float(value)])
     graph_df = pd.DataFrame(graph_df, columns=["timestamp", "from", "to", "value"])
     graph_df = graph_df[graph_df["timestamp"].isin(node_df.index)].set_index("timestamp")
     graph_df["value"] = graph_df["value"].astype(float)
-    graph_df.to_csv(os.path.join(args.output, "pod_requests.csv"))
 
     node_df = node_df.sort_values("timestamp")
     graph_df = graph_df.sort_values("timestamp")
+
+    node_df.to_csv(os.path.join(args.output, f"pod_metrics{'_test' if args.is_test else ''}.csv"))
+    graph_df.to_csv(os.path.join(args.output, f"pod_requests{'_test' if args.is_test else ''}.csv"))
 
     # Node info extractor section
     print("Generating node information")
@@ -120,7 +130,7 @@ if __name__ == '__main__':
         y_node.append(np.array(y))
     X_node = np.array(X_node)
     y_node = np.array(y_node)
-    np.savez(os.path.join(args.output, "node_features.npz"), X=X_node, y=y_node)
+    np.savez(os.path.join(args.output, f"node_features{'_test' if args.is_test else ''}.npz"), X=X_node, y=y_node)
     print("Node dataset shape: X =", X_node.shape, ", y =", y_node.shape)
 
     # Edge info extractor section
@@ -148,5 +158,5 @@ if __name__ == '__main__':
             A_graph.append(graph)
             graph = graph[1:]
     A_graph = np.array(A_graph)
-    np.savez(os.path.join(args.output, "edge_features.npz"), A=A_graph)
+    np.savez(os.path.join(args.output, f"edge_features{'_test' if args.is_test else ''}.npz"), A=A_graph)
     print("Edge dataset shape:", A_graph.shape)
