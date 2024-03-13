@@ -1,4 +1,5 @@
 import os
+import matplotlib.pyplot as plt
 import numpy as np
 from argparse import ArgumentParser
 import torch
@@ -7,48 +8,19 @@ from torch_geometric.utils import dense_to_sparse
 from torch_geometric_temporal import DynamicGraphTemporalSignal
 from torch_geometric_temporal.nn.recurrent import A3TGCN
 from torch_geometric_temporal.signal import temporal_signal_split
-import lightning.pytorch as pl
-from lightning import LightningModule
-from lightning.pytorch.callbacks import EarlyStopping
-from torch_geometric.loader import DataLoader
-from torch import nn
 
 
-class KubernetesA3TGCN(LightningModule):
-    def __init__(self, dim_in=12, hidde_channels=10, periods=1, lr=0.1):
+class KubernetesA3TGCN(torch.nn.Module):
+    def __init__(self, dim_in, hidde_channels, periods):
         super().__init__()
-        self.learning_rate = lr
         self.tgnn = A3TGCN(in_channels=dim_in, out_channels=hidde_channels, periods=periods)
         self.linear = torch.nn.Linear(hidde_channels, periods)
 
-    def __forward(self, batch):
-        x = batch.x.unsqueeze(2)
-        edge_index = batch.edge_index
-        edge_attr = batch.edge_attr
-
+    def forward(self, x, edge_index, edge_attr):
         h = self.tgnn(x, edge_index, edge_attr)
         h = F.relu(h)
         h = self.linear(h)
-
-        return h.ravel()
-
-    def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        return self.__forward(batch)
-
-    def training_step(self, batch, batch_idx):
-        h = self.__forward(batch)
-        y = batch.y
-        loss = nn.functional.mse_loss(h, y)
-
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        loss = self.training_step(batch, batch_idx)
-        self.log("val_loss", loss)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
+        return h
 
 
 def get_args():
@@ -64,8 +36,8 @@ def get_args():
                         help="hidden dimension of A3TGCN model")
     parser.add_argument('--cuda', action='store_true')
     parser.add_argument('--no-cuda', dest='cuda', action='store_false')
-    parser.add_argument("--max-epochs", type=int, default=500,
-                        help="max number of epochs to train")
+    parser.add_argument("--epochs", type=int, default=500,
+                        help="number of epochs for A3TGCN model")
     parser.add_argument("--learning-rate", type=float, default=0.01,
                         help="learning rate for Adam optimizer")
     parser.add_argument("--output", type=str, default=None,
@@ -97,33 +69,44 @@ if __name__ == "__main__":
     args = get_args()
     node_features = np.load(os.path.join(args.data, "node_features.npz"))
     edge_features = np.load(os.path.join(args.data, "edge_features.npz"))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not args.cuda:
+        device = torch.device("cpu")
 
     X, y = node_features["X"], node_features["y"]
     A = edge_features["A"]
     k8s_dataset = create_dataset(X, A, y, args.resource_id)
 
-    train_dataset, val_dataset = temporal_signal_split(k8s_dataset, train_ratio=0.8)
-    model = KubernetesA3TGCN(args.lags, args.hidden_dim, 1, args.learning_rate)
+    train_dataset, test_dataset = temporal_signal_split(k8s_dataset, train_ratio=0.8)
+    model = KubernetesA3TGCN(args.lags, args.hidden_dim, 1).to(device)
 
-    early_stop_callback = EarlyStopping(
-        monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min")
-    trainer = pl.Trainer(
-        max_epochs=args.max_epochs,
-        accelerator="cuda" if args.cuda else "cpu",
-        enable_model_summary=True,
-        gradient_clip_val=0.1,
-        callbacks=[early_stop_callback],
-    )
-    print(len(list(train_dataset)))
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    history = []
+    model.train()
+    for epoch in range(args.epochs):
+        loss = 0
+        step = 0
+        for i, snapshot in enumerate(train_dataset):
+            x = snapshot.x.to(device)
+            edge_index = snapshot.edge_index.to(device)
+            edge_attr = snapshot.edge_attr.to(device)
+            y = snapshot.y.to(device)
 
-    trainer.fit(
-        model,
-        train_dataloaders=DataLoader(list(train_dataset), batch_size=1, num_workers=23),
-        val_dataloaders=DataLoader(list(val_dataset), batch_size=1, num_workers=23),
-    )
+            y_pred = model(x.unsqueeze(2), edge_index, edge_attr)
+            loss += torch.mean((y_pred - y) ** 2)
+            step += 1
 
+        loss = loss / (step + 1)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        history.append(loss.item())
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch+1:>2} | Train MSE: {loss:.4f}")
+
+    plt.plot(history)
+    plt.xlabel("Epochs")
+    plt.ylabel("MSE Loss")
+    plt.show()
     if args.output is not None:
-        best_model_path = trainer.checkpoint_callback.best_model_path
-        best_model = KubernetesA3TGCN.load_from_checkpoint(best_model_path)
-        torch.save(best_model.state_dict(),
-                   os.path.join(args.output, "a3tgcn.pt"))
+        torch.save(model.state_dict(), os.path.join(args.output, "a3tgcn.pt"))

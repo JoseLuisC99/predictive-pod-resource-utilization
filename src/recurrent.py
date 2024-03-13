@@ -1,4 +1,5 @@
 import os
+import shutil
 import warnings
 import torch
 from argparse import ArgumentParser
@@ -44,15 +45,14 @@ def get_args():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
-    args = get_args()
-    data = pd.read_csv(os.path.join(args.data, "pod_metrics.csv"))
+def get_dataset(data, resource_id, lags):
+    data = pd.read_csv(os.path.join(data, "pod_metrics.csv"))
     data["group"] = 0
     data["time_idx"] = data["timestamp"].argsort()
 
     drop_names = []
     for name in data.columns.values:
-        if name.endswith("mem" if args.resource_id == 0 else "cpu"):
+        if name.endswith("mem" if resource_id == 0 else "cpu"):
             drop_names.append(name)
     data = data.drop(columns=drop_names)
 
@@ -62,17 +62,22 @@ if __name__ == "__main__":
     targets.remove("group")
     targets.remove("time_idx")
 
-    training = TimeSeriesDataSet(
+    return TimeSeriesDataSet(
         data,
         time_idx="time_idx",
         target=targets,
         group_ids=["group"],
-        max_encoder_length=args.lags,
+        max_encoder_length=lags,
         max_prediction_length=1,
         static_reals=["group"],
         time_varying_known_reals=["timestamp", "time_idx"],
         time_varying_unknown_reals=targets
-    )
+    ), data
+
+
+if __name__ == "__main__":
+    args = get_args()
+    training, data = get_dataset(args.data, args.resource_id, args.lags)
 
     validation = TimeSeriesDataSet.from_dataset(training, data, predict=True, stop_randomization=True)
     train_dataloader = training.to_dataloader(train=True, batch_size=args.batch_size)
@@ -121,11 +126,9 @@ if __name__ == "__main__":
     # Saving the model
     if args.output is not None:
         best_model_path = trainer.checkpoint_callback.best_model_path
-        if args.model == "tft":
-            best_model = TemporalFusionTransformer.load_from_checkpoint(best_model_path)
-        else:
-            best_model = RecurrentNetwork.load_from_checkpoint(best_model_path)
-        torch.save(best_model.state_dict(),
-                   os.path.join(args.output,
-                                f"{args.model}{f'_{args.cell_type}' if args.model == 'recurrent' else ''}.pt".lower()))
+        shutil.copy2(
+            best_model_path,
+            os.path.join(
+                args.output,
+                f"{args.model}{f'_{args.cell_type}' if args.model == 'recurrent' else ''}.ckpt".lower()))
 

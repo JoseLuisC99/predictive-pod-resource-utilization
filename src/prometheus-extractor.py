@@ -83,13 +83,13 @@ if __name__ == '__main__':
     if args.stats is None:
         node_mean = node_df.mean()
         node_std = node_df.std()
-        pd.DataFrame({"mean": node_mean, "std": node_std}).to_csv(os.path.join(args.output, "pod_stats.csv"))
+        node_mean.to_csv(os.path.join(args.output, "pod_mean.csv"))
+        node_std.to_csv(os.path.join(args.output, "pod_std.csv"))
         print("Saving stats")
     else:
         print("Reading stats")
-        stats = pd.read_csv(args.stats)
-        node_mean = stats["mean"]
-        node_std = stats["std"]
+        node_mean = pd.read_csv(os.path.join(args.stats, "pod_mean.csv"), index_col=0).squeeze()
+        node_std = pd.read_csv(os.path.join(args.stats, "pod_std.csv"), index_col=0).squeeze()
     node_df = (node_df - node_mean) / node_std
 
     print("Loading Prometheus pod requests")
@@ -110,8 +110,8 @@ if __name__ == '__main__':
     node_df = node_df.sort_values("timestamp")
     graph_df = graph_df.sort_values("timestamp")
 
-    node_df.to_csv(os.path.join(args.output, f"pod_metrics{'_test' if args.is_test else ''}.csv"))
-    graph_df.to_csv(os.path.join(args.output, f"pod_requests{'_test' if args.is_test else ''}.csv"))
+    node_df.to_csv(os.path.join(args.output, "pod_metrics.csv"))
+    graph_df.to_csv(os.path.join(args.output, "pod_requests.csv"))
 
     # Node info extractor section
     print("Generating node information")
@@ -130,7 +130,7 @@ if __name__ == '__main__':
         y_node.append(np.array(y))
     X_node = np.array(X_node)
     y_node = np.array(y_node)
-    np.savez(os.path.join(args.output, f"node_features{'_test' if args.is_test else ''}.npz"), X=X_node, y=y_node)
+    np.savez(os.path.join(args.output, "node_features.npz"), X=X_node, y=y_node)
     print("Node dataset shape: X =", X_node.shape, ", y =", y_node.shape)
 
     # Edge info extractor section
@@ -158,5 +158,5 @@ if __name__ == '__main__':
             A_graph.append(graph)
             graph = graph[1:]
     A_graph = np.array(A_graph)
-    np.savez(os.path.join(args.output, f"edge_features{'_test' if args.is_test else ''}.npz"), A=A_graph)
+    np.savez(os.path.join(args.output, "edge_features.npz"), A=A_graph)
     print("Edge dataset shape:", A_graph.shape)

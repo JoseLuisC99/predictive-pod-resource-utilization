@@ -4,4 +4,5 @@ notebooks/.ipynb_checkpoints
 notebooks/archive
 lightning_logs
 venv
+models
 *.sh
