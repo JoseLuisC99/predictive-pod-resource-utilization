@@ -3,6 +3,9 @@ notebooks/img
 notebooks/.ipynb_checkpoints
 notebooks/archive
 lightning_logs
-venv
 models
+pycache
+paper
+data/hyper
+src/__pycache__
 *.sh

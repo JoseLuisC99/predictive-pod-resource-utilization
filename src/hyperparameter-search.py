@@ -75,15 +75,15 @@ def test(model, test_dataset):
     return loss
 
 
-def objective_astgcn(trial):
+def objective_astgcn(trial, resource):
     hidden_dim = trial.suggest_int('hidden_dim', 4, 128)
     learning_rate = trial.suggest_float('learning_rate', 0.01, 0.5)
 
-    node_features = np.load("data/node_features.npz")
-    edge_features = np.load("data/edge_features.npz")
+    node_features = np.load("data/hyper/node_features.npz")
+    edge_features = np.load("data/hyper/edge_features.npz")
     X, y = node_features["X"], node_features["y"]
     A = edge_features["A"]
-    k8s_dataset = create_dataset(X, A, y, 0)
+    k8s_dataset = create_dataset(X, A, y, resource)
     train_dataset, test_dataset = temporal_signal_split(k8s_dataset, train_ratio=0.8)
 
     model = KubernetesA3TGCN(12, hidden_dim, 1).to("cpu")
@@ -91,14 +91,14 @@ def objective_astgcn(trial):
     return test(model, test_dataset)
 
 
-def get_data_from_csv():
-    data = pd.read_csv("data/pod_metrics.csv")
+def get_data_from_csv(resource):
+    data = pd.read_csv("data/hyper/pod_metrics.csv")
     data["group"] = 0
     data["time_idx"] = data["timestamp"].argsort()
 
     drop_names = []
     for name in data.columns.values:
-        if name.endswith("mem"):
+        if name.endswith("mem" if resource == 0 else "cpu"):
             drop_names.append(name)
     data = data.drop(columns=drop_names)
     targets = list(data.columns.values)
@@ -162,8 +162,8 @@ def get_lstm(trial, training):
     )
 
 
-def objective_recurrent(trial, architecture):
-    training, train_dataloader, val_dataloader = get_data_from_csv()
+def objective_recurrent(trial, architecture, resource):
+    training, train_dataloader, val_dataloader = get_data_from_csv(resource)
     if architecture == "tft":
         model = get_tft(trial, training)
     elif architecture == "rnn":
@@ -211,9 +211,9 @@ if __name__ == "__main__":
         )
 
     if args.model == "gcn":
-        objective = objective_astgcn
+        objective = partial(objective_astgcn, resource=args.resource)
     elif args.model == "tft" or args.model == "rnn":
-        objective = partial(objective_recurrent, architecture=args.model)
+        objective = partial(objective_recurrent, architecture=args.model, resource=args.resource)
     else:
         raise ValueError(f"Objective {args.model} not valid")
 
